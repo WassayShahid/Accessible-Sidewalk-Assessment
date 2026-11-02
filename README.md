@@ -2,7 +2,7 @@
 
 CS/SE 4AL3 project, Group 33. A single model that takes a Street View crop of a sidewalk feature and its category, and predicts which accessibility conditions are present (cracks, steep, pole, and so on).
 
-Adapted from the [CIFAR-10 classifier](https://github.com/WassayShahid/Classifier). Nothing has been trained yet, so this repo has no results.
+Adapted from `classifier.py` in the [CIFAR-10 classifier](https://github.com/WassayShahid/Classifier). Nothing has been trained yet, so this repo has no results.
 
 ## Setup
 
@@ -39,10 +39,13 @@ This writes 640x640 crops to `data/processed/`, using the same crop as the autho
 ## Training
 
 ```bash
+# Default: the CNN from classifier.py, 60 epochs at 256x256, no pretrained weights
+python train.py
+
 # ResNet-50 baseline
 python train.py --backbone resnet50
 
-# Long-tail methods
+# Long-tail methods (these flags work with any backbone)
 python train.py --backbone resnet50 --loss weighted_bce
 python train.py --backbone resnet50 --loss focal
 python train.py --backbone resnet50 --oversample
@@ -59,8 +62,8 @@ Each run keeps the epoch with the best validation macro F1 in `checkpoints/`, al
 ## Evaluation and prediction
 
 ```bash
-python evaluate.py checkpoints/resnet50-bce.pth
-python predict.py checkpoints/resnet50-bce.pth --category CurbRamp --image crop.png
+python evaluate.py checkpoints/cnn-bce.pth
+python predict.py checkpoints/cnn-bce.pth --category CurbRamp --image crop.png
 ```
 
 `evaluate.py` prints per-tag precision, recall and F1, then macro, micro and weighted F1 overall and per category. It also saves the per-tag table to `results/`. Leave out `--image` in `predict.py` to open a file picker.
@@ -88,14 +91,14 @@ Four outputs can't learn anything because their tags have no positives in the tr
 | --- | --- |
 | `CrossEntropyLoss`, softmax, top-1 prediction | Masked BCE or focal loss, sigmoid, tuned thresholds |
 | Accuracy, `classification_report` | Per-tag precision, recall and F1, plus macro, micro and weighted F1 |
-| Custom ResNet with a 3x3 first convolution for 32x32 images | torchvision ResNet-50 with ImageNet weights, plus DINOv2 and CLIP through timm |
-| SGD at one learning rate | AdamW, with a lower rate for the backbone than the head |
+| `ConvNeuralNet` with 10 outputs | Same network with 46 outputs, plus ResNet-50, DINOv2 and CLIP as pretrained options |
+| SGD with momentum | Same for `cnn`; AdamW for the pretrained backbones, with a lower rate for the backbone than the head |
 | `torchvision.datasets.CIFAR10` | `SidewalkDataset`, reading the four category CSVs |
 | Random crop and flip also applied to the test set | Augmentation on training data only |
 | Test set used for validation, last epoch saved | Separate validation split, best epoch saved |
 | CIFAR-10 normalisation, inconsistent between train and predict | Normalisation matched to each backbone, shared by train and predict |
 
-The `CosineAnnealingLR` schedule, dropout of 0.25 and file picker carry over.
+The `cnn` run keeps the settings from `classifier.py`: 256x256 input, 60 epochs, batch size 64, learning rate 0.01, weight decay 5e-4, `CosineAnnealingLR`, dropout of 0.25. The file picker carries over too.
 
 ## Not implemented
 

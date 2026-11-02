@@ -19,7 +19,7 @@ import train
 from dataset import CATEGORIES, build_category_masks, build_vocabulary, compute_pos_weight, load_samples
 from losses import MaskedBCELoss, MaskedFocalLoss
 from metrics import apply_thresholds, per_tag_metrics, summarize, tune_thresholds
-from model import SidewalkTagger, load_checkpoint
+from model import ConvNeuralNet, SidewalkTagger, load_checkpoint
 from predict import predict_tags
 
 TAGS = {
@@ -107,15 +107,28 @@ def test_metrics():
 
 
 def test_backbones():
-    for backbone in ('resnet50', 'dinov2', 'clip'):
-        model = SidewalkTagger(backbone, 6, 224, pretrained=False).eval()
+    for backbone, size in (('cnn', 256), ('resnet50', 224), ('dinov2', 224), ('clip', 224)):
+        model = SidewalkTagger(backbone, 6, size, pretrained=False).eval()
         with torch.no_grad():
-            assert model(torch.zeros(1, 3, 224, 224)).shape == (1, 6)
+            assert model(torch.zeros(1, 3, size, size)).shape == (1, 6)
+
+
+def test_cnn_defaults(tmp, data_dir):
+    argv = ['--data-dir', data_dir, '--output-dir', os.path.join(tmp, 'cnn'), '--num-workers', '0']
+    args = train.parse_args(argv)
+    assert args.backbone == 'cnn'
+    assert (args.epochs, args.batch_size, args.image_size, args.lr, args.weight_decay) == (60, 64, 256, 0.01, 5e-4)
+
+    path = train.main(argv + ['--epochs', '1', '--batch-size', '4'])
+    assert os.path.basename(path) == 'cnn-bce.pth'
+    model, checkpoint = load_checkpoint(path, torch.device('cpu'))
+    assert checkpoint['image_size'] == 256 and isinstance(model.backbone, ConvNeuralNet)
 
 
 def test_end_to_end(tmp, data_dir):
     common = ['--data-dir', data_dir, '--output-dir', os.path.join(tmp, 'checkpoints'), '--no-pretrained',
-              '--epochs', '1', '--batch-size', '4', '--image-size', '64', '--num-workers', '0']
+              '--backbone', 'resnet50', '--epochs', '1', '--batch-size', '4', '--image-size', '64',
+              '--num-workers', '0']
 
     train.main(common + ['--loss', 'weighted_bce'])
 
@@ -137,7 +150,7 @@ def test_end_to_end(tmp, data_dir):
 def test_linear_probe_freezes_backbone(tmp, data_dir):
     torch.manual_seed(0)
     args = train.parse_args(['--data-dir', data_dir, '--output-dir', os.path.join(tmp, 'probe'), '--no-pretrained',
-                             '--epochs', '1', '--batch-size', '4', '--image-size', '64', '--num-workers', '0',
+                             '--backbone', 'resnet50', '--epochs', '1', '--batch-size', '4', '--image-size', '64', '--num-workers', '0',
                              '--linear-probe'])
     model = SidewalkTagger('resnet50', 6, 64, pretrained=False)
     model.freeze_backbone()
@@ -161,6 +174,7 @@ def main():
         test_losses_ignore_invalid_tags()
         test_metrics()
         test_backbones()
+        test_cnn_defaults(tmp, data_dir)
         test_end_to_end(tmp, data_dir)
         test_linear_probe_freezes_backbone(tmp, data_dir)
     print('\nAll checks passed.')

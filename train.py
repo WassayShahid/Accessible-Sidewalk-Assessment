@@ -13,24 +13,40 @@ from metrics import apply_thresholds, collect_predictions, per_tag_metrics, summ
 from model import SidewalkTagger
 
 
+# The cnn values are the ones from classifier.py.
+CNN_DEFAULTS = {'epochs': 60, 'batch_size': 64, 'image_size': 256, 'lr': 0.01, 'head_lr': 0.01, 'weight_decay': 5e-4}
+PRETRAINED_DEFAULTS = {'epochs': 15, 'batch_size': 32, 'image_size': 224, 'lr': 1e-4, 'head_lr': 1e-3, 'weight_decay': 1e-4}
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description='Train the category-masked sidewalk tagger')
     parser.add_argument('--data-dir', default='data/processed')
     parser.add_argument('--output-dir', default='checkpoints')
-    parser.add_argument('--backbone', choices=['resnet50', 'dinov2', 'clip'], default='resnet50')
+    parser.add_argument('--backbone', choices=['cnn', 'resnet50', 'dinov2', 'clip'], default='cnn')
     parser.add_argument('--loss', choices=['bce', 'weighted_bce', 'focal'], default='bce')
     parser.add_argument('--oversample', action='store_true', help='oversample images with rare tags')
     parser.add_argument('--linear-probe', action='store_true', help='freeze the backbone and train only the head')
     parser.add_argument('--pretrained', action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--epochs', type=int, default=15)
-    parser.add_argument('--batch-size', type=int, default=32)
-    parser.add_argument('--image-size', type=int, default=224, help='must be a multiple of 14 for dinov2')
-    parser.add_argument('--lr', type=float, default=1e-4, help='backbone learning rate')
-    parser.add_argument('--head-lr', type=float, default=1e-3)
-    parser.add_argument('--weight-decay', type=float, default=1e-4)
+    parser.add_argument('--epochs', type=int)
+    parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--image-size', type=int, help='cnn needs 256; dinov2 needs a multiple of 14')
+    parser.add_argument('--lr', type=float, help='backbone learning rate')
+    parser.add_argument('--head-lr', type=float)
+    parser.add_argument('--weight-decay', type=float)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--seed', type=int, default=42)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    defaults = CNN_DEFAULTS if args.backbone == 'cnn' else PRETRAINED_DEFAULTS
+    for name, value in defaults.items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
+
+    if args.backbone == 'cnn' and args.image_size != 256:
+        parser.error('--backbone cnn needs --image-size 256')
+    if args.backbone == 'cnn' and args.linear_probe:
+        parser.error('--linear-probe needs a pretrained backbone; cnn starts from random weights')
+    return args
 
 
 def run_name(args):
@@ -89,7 +105,10 @@ def train_model(args):
     param_groups = [{'params': model.head.parameters(), 'lr': args.head_lr}]
     if not args.linear_probe:
         param_groups.append({'params': model.backbone.parameters(), 'lr': args.lr})
-    optimizer = optim.AdamW(param_groups, weight_decay=args.weight_decay)
+    if args.backbone == 'cnn':
+        optimizer = optim.SGD(param_groups, lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    else:
+        optimizer = optim.AdamW(param_groups, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     use_amp = device.type == 'cuda'
