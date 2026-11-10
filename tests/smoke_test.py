@@ -5,6 +5,7 @@ Run from the repo root: python tests/smoke_test.py
 import os
 import sys
 import tempfile
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -39,7 +40,7 @@ def write_raw_dataset(raw_dir):
             rows = []
             for i in range(count):
                 filename = f'gsv-testcity-{split}{i}-{category}.png'
-                pixels = rng.integers(0, 255, (720, 960, 3), dtype=np.uint8)
+                pixels = rng.integers(0, 255, (720, 960, 4), dtype=np.uint8)  # the real images are RGBA PNGs
                 Image.fromarray(pixels).save(os.path.join(raw_dir, category, 'crops', filename))
                 row = {'filename': filename, 'normalized_x': 0.5, 'normalized_y': 0.5}
                 row.update({tag: int(rng.integers(0, 2)) for tag in TAGS[category]})
@@ -55,6 +56,41 @@ def test_crop(tmp):
     prepare_data.crop_image(source, corner, 0.1, 0.1)
     assert Image.open(centre).size == (640, 640)
     assert Image.open(corner).size == (420, 400)
+
+
+def test_zip_source(tmp, raw_dir):
+    """Cropping straight from the zips, saved as JPEG, gives the same samples as the unzipped PNG route."""
+    zip_dir, jpeg_dir = os.path.join(tmp, 'zips'), os.path.join(tmp, 'processed-jpeg')
+    os.makedirs(zip_dir)
+    for category in CATEGORIES:
+        with zipfile.ZipFile(os.path.join(zip_dir, f'{category}.zip'), 'w') as archive:
+            for folder, _, files in os.walk(os.path.join(raw_dir, category)):
+                for name in files:
+                    path = os.path.join(folder, name)
+                    archive.write(path, os.path.relpath(path, raw_dir).replace(os.sep, '/'))
+    prepare_data.main(['--zip-dir', zip_dir, '--output-dir', jpeg_dir, '--jpeg'])
+    prepare_data.main(['--zip-dir', zip_dir, '--output-dir', jpeg_dir, '--jpeg', '--categories', 'Obstacle'])  # rerun skips
+
+    tags, category_tags = build_vocabulary(jpeg_dir)
+    samples = load_samples(jpeg_dir, 'train', tags, category_tags)
+    assert len(samples) == 48 and all(path.endswith('.jpg') for path in samples.paths)
+    with Image.open(samples.paths[0]) as image:
+        assert image.format == 'JPEG' and image.size == (640, 640)
+    return jpeg_dir
+
+
+def test_resume(tmp, data_dir):
+    output_dir = os.path.join(tmp, 'resume')
+    common = ['--data-dir', data_dir, '--output-dir', output_dir, '--no-pretrained', '--backbone', 'resnet50',
+              '--batch-size', '4', '--image-size', '64', '--num-workers', '0', '--resume']
+    train.main(common + ['--epochs', '1'])
+    last_path = os.path.join(output_dir, 'resnet50-bce-last.pth')
+    assert torch.load(last_path)['epoch'] == 1
+    train.main(common + ['--epochs', '2'])
+    assert torch.load(last_path)['epoch'] == 2
+    train.main(common + ['--epochs', '2'])  # already finished: trains nothing
+    assert torch.load(last_path)['epoch'] == 2
+    assert os.path.exists(os.path.join(output_dir, 'resnet50-bce.pth'))
 
 
 def test_vocabulary(data_dir):
@@ -170,6 +206,7 @@ def main():
         prepare_data.main(['--raw-dir', raw_dir, '--output-dir', data_dir])
 
         test_crop(tmp)
+        jpeg_dir = test_zip_source(tmp, raw_dir)
         test_vocabulary(data_dir)
         test_losses_ignore_invalid_tags()
         test_metrics()
@@ -177,6 +214,7 @@ def main():
         test_cnn_defaults(tmp, data_dir)
         test_end_to_end(tmp, data_dir)
         test_linear_probe_freezes_backbone(tmp, data_dir)
+        test_resume(tmp, jpeg_dir)
     print('\nAll checks passed.')
 
 

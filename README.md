@@ -27,6 +27,18 @@ python prepare_data.py
 
 This writes 640x640 crops to `data/processed/`, using the same crop as the authors' `crop.py`. Labels near an image edge give a smaller crop. Once it finishes, `data/raw/` can be deleted.
 
+To skip unzipping, point `--zip-dir` at the folder holding the zips. `--jpeg` saves the crops as JPEG, about 3.7 GB for the whole dataset instead of about 14 GB as PNG. `--categories` limits it to some of the four.
+
+```bash
+python prepare_data.py --zip-dir Validated --jpeg --categories Crosswalk
+```
+
+### Colab
+
+[colab/train_colab.ipynb](colab/train_colab.ipynb) downloads, crops, trains and evaluates on a Colab GPU, keeping crops and checkpoints in Google Drive so a disconnect loses little. Run `python colab/package_code.py`, upload the resulting `colab/sidewalk-code.zip` to `My Drive/sidewalk/`, then open the notebook in Colab and run all. Pass `--resume` to `train.py` anywhere to continue an interrupted run.
+
+To bill a Google Cloud project instead, use [colab/train_colab_enterprise.ipynb](colab/train_colab_enterprise.ipynb) in Colab Enterprise. It is the same notebook with a Cloud Storage bucket in place of Drive: upload the zip to the bucket and put the bucket name in the first cell.
+
 | Category | Train | Test | Tag columns |
 | --- | --- | --- | --- |
 | CurbRamp | 8,674 | 2,183 | 10 |

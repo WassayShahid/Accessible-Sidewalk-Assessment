@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 
 import numpy as np
 import torch
@@ -35,6 +36,8 @@ def parse_args(argv=None):
     parser.add_argument('--weight-decay', type=float)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--resume', action='store_true',
+                        help='continue from <run>-last.pth in --output-dir if it exists, e.g. after a Colab disconnect')
     args = parser.parse_args(argv)
 
     defaults = CNN_DEFAULTS if args.backbone == 'cnn' else PRETRAINED_DEFAULTS
@@ -116,9 +119,21 @@ def train_model(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
     checkpoint_path = os.path.join(args.output_dir, f'{run_name(args)}.pth')
+    last_path = os.path.join(args.output_dir, f'{run_name(args)}-last.pth')
     best_macro_f1 = -1.0
+    start_epoch = 0
 
-    for epoch in range(args.epochs):
+    if args.resume and os.path.exists(last_path):
+        state = torch.load(last_path, map_location=device)
+        model.load_state_dict(state['state_dict'])
+        optimizer.load_state_dict(state['optimizer'])
+        scheduler.load_state_dict(state['scheduler'])
+        scaler.load_state_dict(state['scaler'])
+        start_epoch, best_macro_f1 = state['epoch'], state['best_macro_f1']
+        print(f'Resuming from {last_path}: {start_epoch} of {args.epochs} epochs done, best val macro F1 {best_macro_f1:.4f}')
+
+    for epoch in range(start_epoch, args.epochs):
+        epoch_start = time.time()
         model.train()
         if args.linear_probe:
             model.backbone.eval()  # keeps BatchNorm statistics frozen too
@@ -139,7 +154,8 @@ def train_model(args):
         summary, thresholds = validate(model, val_loader, device, tags, category_tags, category_masks)
         scheduler.step()
         print(f"Epoch {epoch+1}/{args.epochs}, Loss: {running_loss/len(train_loader):.4f}, "
-              f"Val macro F1: {summary['macro_f1']:.4f}, Val micro F1: {summary['micro_f1']:.4f}")
+              f"Val macro F1: {summary['macro_f1']:.4f}, Val micro F1: {summary['micro_f1']:.4f}, "
+              f"{time.time() - epoch_start:.0f}s", flush=True)
 
         if summary['macro_f1'] > best_macro_f1:
             best_macro_f1 = summary['macro_f1']
@@ -153,6 +169,18 @@ def train_model(args):
                 'epoch': epoch + 1,
                 'val_macro_f1': float(best_macro_f1),
             }, checkpoint_path)
+
+        if args.resume:
+            # Written to a temporary file first so a disconnect mid-save can't corrupt it.
+            torch.save({
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'scaler': scaler.state_dict(),
+                'epoch': epoch + 1,
+                'best_macro_f1': float(best_macro_f1),
+            }, last_path + '.tmp')
+            os.replace(last_path + '.tmp', last_path)
 
     print(f'Best val macro F1: {best_macro_f1:.4f}, saved to {checkpoint_path}')
     return checkpoint_path

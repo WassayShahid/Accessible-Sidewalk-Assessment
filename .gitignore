@@ -5,3 +5,4 @@ results/
 __pycache__/
 .venv/
 venv/
+colab/sidewalk-code.zip
